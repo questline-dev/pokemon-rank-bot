@@ -1,0 +1,17 @@
+{
+  "name": "포켓몬 IV 랭크체커",
+  "short_name": "랭크체커",
+  "description": "포켓몬GO PvP(슈퍼/하이퍼/마스터) IV 랭크체커",
+  "start_url": "./포켓몬랭크봇.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f7f7f9",
+  "theme_color": "#3b6fe0",
+  "lang": "ko",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

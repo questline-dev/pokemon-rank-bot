@@ -1,0 +1,489 @@
+[개선점]
+https://www.stadiumgaming.gg/rank-checker
+에서 산출되는 CP가 정확하게 산출되면 좋겠어.
+
+[현재스크립트]
+/*
+ * ===============================================
+ *  포켓몬 IV 랭크체커 봇 (메신저봇R)
+ * ===============================================
+ *  명령어:
+ *   ?포켓몬 <한국어이름> <IV공격> <IV체력> <IV방어> <CP>
+ *   예: ?포켓몬 파이리 0 14 15 395
+ *
+ *   ?포켓몬디버그 <한국어이름>   (이름 조회가 안될 때 진단용)
+ *
+ * ※ 메신저봇R에서 "네트워크 사용" 권한을 반드시 켜주세요.
+ *
+ * [동작 원리]
+ * 1) PokeAPI 프로젝트의 공개 CSV 데이터(pokemon_species_names.csv)에서
+ *    한국어(language_id=3) 이름이 정확히 일치하는 행을 찾아 species_id를 얻고,
+ *    pokemon_species.csv에서 그 species_id의 영어 슬러그(예: "charmander")를 찾음
+ *    (※ 기존에는 fandom 위키를 이용했으나, Cloudflare 봇 차단(HTTP 403,
+ *    "Just a moment..." JS 챌린지)에 걸려서 이 방식으로 교체함)
+ * 2) PvPoke 프로젝트의 공개 데이터(gamemaster.json)에서 그 영어 슬러그의
+ *    종족값(공격/방어/체력)과 진화 계열(같은 family.id) 전체를 가져옴
+ *    (메가진화 포함, shadow 폼은 제외)
+ * 3) 포켓몬GO의 공개된 CP공식 / CPM표를 이용해서, 슈퍼(1500)/하이퍼(2500)/
+ *    마스터(무제한, 최대레벨 50) 리그별로 "입력한 3개 IV가 4096가지 조합 중
+ *    몇등인지"를 직접 계산함 (pvpivs.com 오픈소스 계산 로직과 동일한 방식)
+ *
+ * [CP 입력값에 대해]
+ * 입력한 CP로 "현재 이 개체의 레벨"을 역산합니다. 파워업으로 레벨을 낮출 수
+ * 없으므로, 특정 진화단계+리그에서 필요한 최적레벨이 이 현재 레벨보다 낮으면
+ * (이미 지나쳐서) 그 리그에는 참전이 불가능합니다 -> (X)로 표시합니다.
+ * 등수 자체(몇등인지)는 여전히 IV 3개만으로 결정됩니다 - CP는 (X) 판정에만 씁니다.
+ *
+ * [(X) 표시에 대해]
+ * 위 규칙을 슈퍼(1500)/하이퍼(2500)/마스터(무제한) 모든 리그, 모든 진화단계에
+ * 각각 적용합니다. (이전 버전에서는 "메가진화는 무조건 X"로 잘못 추정했었는데,
+ * 실제로는 이 레벨 비교 규칙이 맞다고 확인되었습니다)
+ * ===============================================
+ */
+
+var Jsoup = org.jsoup.Jsoup;
+
+var SPECIES_NAMES_CSV_URL = "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/pokemon_species_names.csv";
+var SPECIES_CSV_URL = "https://raw.githubusercontent.com/PokeAPI/pokeapi/master/data/v2/csv/pokemon_species.csv";
+var KOREAN_LANGUAGE_ID = "3"; // PokeAPI 언어 ID: 1=일본어, 3=한국어, 9=영어 ...
+var GAMEMASTER_URL = "https://raw.githubusercontent.com/pvpoke/pvpoke/master/src/data/gamemaster.json";
+
+// ---------------------------------------------
+// CPM (레벨별 배수) 표 : 레벨 1 ~ 50, 0.5 단위 (index*0.5 + 1 = 레벨)
+// 출처: 포켓몬GO 커뮤니티에 공개된 값 (여러 오픈소스 도구에서 공통으로 사용)
+// ---------------------------------------------
+var CPM = [0.0939999967813491,0.135137430784308,0.166397869586944,0.192650914456886,0.215732470154762,0.236572655026622,0.255720049142837,0.273530381100769,0.29024988412857,0.306057381335773,0.321087598800659,0.335445032295077,0.349212676286697,0.36245774877879,0.375235587358474,0.387592411085168,0.399567276239395,0.41119354951725,0.422500014305114,0.432926413410414,0.443107545375824,0.453059953871985,0.46279838681221,0.472336077786704,0.481684952974319,0.490855810259008,0.499858438968658,0.508701756943992,0.517393946647644,0.525942508771329,0.534354329109191,0.542635762230353,0.550792694091796,0.558830599438087,0.566754519939422,0.574569148039264,0.582278907299041,0.589887911977272,0.59740000963211,0.604823657502073,0.61215728521347,0.61940411056605,0.626567125320434,0.633649181622743,0.640652954578399,0.647580963301656,0.654435634613037,0.661219263506722,0.667934000492096,0.674581899290818,0.681164920330047,0.687684905887771,0.694143652915954,0.700542893277978,0.706884205341339,0.713169102333341,0.719399094581604,0.725575616972598,0.731700003147125,0.734741011137376,0.737769484519958,0.740785574597326,0.743789434432983,0.746781208702482,0.749761044979095,0.752729105305821,0.75568550825119,0.758630366519684,0.761563837528228,0.764486065255226,0.767397165298461,0.77029727397159,0.77318650484085,0.776064945942412,0.778932750225067,0.781790064808426,0.784636974334716,0.787473583646825,0.790300011634826,0.792803950958807,0.795300006866455,0.79780392148697,0.800300002098083,0.802803892322847,0.805299997329711,0.807803863460723,0.81029999256134,0.812803834895026,0.815299987792968,0.817803806620319,0.820299983024597,0.822803778631297,0.825299978256225,0.827803750922782,0.830299973487854,0.832803753381377,0.835300028324127,0.837803755931569,0.840300023555755];
+
+var MAX_LEVEL_INDEX = CPM.length - 1; // = 98, 레벨 50
+
+// ---------------------------------------------
+// CP / 스탯 계산
+// ---------------------------------------------
+
+function calcCP(atk, def, hp, ivA, ivD, ivS, levelIdx) {
+    var cpm = CPM[levelIdx];
+    var cp = Math.floor((atk + ivA) * Math.sqrt(def + ivD) * Math.sqrt(hp + ivS) * cpm * cpm / 10);
+    return Math.max(10, cp);
+}
+
+function calcStatProduct(atk, def, hp, ivA, ivD, ivS, levelIdx) {
+    var cpm = CPM[levelIdx];
+    var aSt = (atk + ivA) * cpm;
+    var dSt = (def + ivD) * cpm;
+    var sSt = Math.max(10, Math.floor((hp + ivS) * cpm));
+    return Math.round(aSt * dSt * sSt);
+}
+
+// cap 이하를 만족하는 가장 높은 레벨 인덱스를 이분탐색으로 찾음.
+// cap이 null이면 무제한(=최대레벨 고정). 레벨1에서도 cap을 못넘으면 -1(overCap) 반환.
+function findBestLevelIndex(atk, def, hp, ivA, ivD, ivS, cap) {
+    if (cap == null) return MAX_LEVEL_INDEX;
+    if (calcCP(atk, def, hp, ivA, ivD, ivS, 0) > cap) return -1;
+
+    var lo = 0, hi = MAX_LEVEL_INDEX;
+    while (lo < hi) {
+        var mid = Math.ceil((lo + hi) / 2);
+        if (calcCP(atk, def, hp, ivA, ivD, ivS, mid) <= cap) {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return lo;
+}
+
+// 주어진 종족값 + IV로 특정 CP를 만드는 레벨(인덱스)을 찾음 (처음 입력받은 CP -> 현재 레벨)
+function findLevelForCP(atk, def, hp, ivA, ivD, ivS, targetCP) {
+    for (var idx = 0; idx <= MAX_LEVEL_INDEX; idx++) {
+        if (calcCP(atk, def, hp, ivA, ivD, ivS, idx) >= targetCP) return idx;
+    }
+    return MAX_LEVEL_INDEX;
+}
+
+// 주어진 종족값(atk,def,hp) + 리그 cap에서, 입력한 IV조합이 4096가지 중 몇 등인지 계산
+// 반환: { rank, overCap, level(레벨 숫자), cp, levelIdx }
+function calcRank(atk, def, hp, ivA, ivD, ivS, cap) {
+    var levelIdx = findBestLevelIndex(atk, def, hp, ivA, ivD, ivS, cap);
+    var overCap = (levelIdx === -1);
+    var refLevelIdx = overCap ? 0 : levelIdx;
+    var targetSP = calcStatProduct(atk, def, hp, ivA, ivD, ivS, refLevelIdx);
+    var targetCP = calcCP(atk, def, hp, ivA, ivD, ivS, refLevelIdx);
+
+    var better = 0;
+    for (var a = 0; a <= 15; a++) {
+        for (var d = 0; d <= 15; d++) {
+            for (var s = 0; s <= 15; s++) {
+                var li;
+                if (overCap) {
+                    li = 0; // 아무도 cap을 못만족하므로 전부 레벨1 기준으로 통일 비교
+                } else {
+                    li = findBestLevelIndex(atk, def, hp, a, d, s, cap);
+                    if (li === -1) continue; // 이 조합은 해당 리그에 아예 참가 불가 -> 비교 제외
+                }
+                var sp = calcStatProduct(atk, def, hp, a, d, s, li);
+                if (sp > targetSP) better++;
+            }
+        }
+    }
+    return {
+        rank: better + 1,
+        overCap: overCap,
+        levelIdx: overCap ? -1 : refLevelIdx, // 현재레벨 비교용 (overCap이면 사실상 레벨 미달로 취급)
+        level: 1 + refLevelIdx * 0.5,
+        cp: targetCP
+    };
+}
+
+// ---------------------------------------------
+// 한국어 이름 -> 영어 슬러그 (PokeAPI 공개 CSV, raw.githubusercontent.com)
+// ---------------------------------------------
+
+function fetchRawText(url) {
+    var res = Jsoup.connect(url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .ignoreContentType(true)
+        .timeout(30000)
+        .maxBodySize(0) // 기본 1MB 제한 해제
+        .ignoreHttpErrors(true)
+        .execute();
+
+    if (res.statusCode() < 200 || res.statusCode() >= 300) {
+        throw ("데이터 요청 실패 (HTTP " + res.statusCode() + "): " + url);
+    }
+    return String(res.body());
+}
+
+// pokemon_species_names.csv 형식: pokemon_species_id,local_language_id,name[,genus]
+// 한국어(language_id=3) 행 중 이름이 정확히 일치하는 것을 찾아 species_id 반환
+function findSpeciesIdByKoreanName(koreanName, csvText) {
+    var lines = csvText.split("\n");
+    for (var i = 1; i < lines.length; i++) { // 0번째는 헤더 행
+        var line = lines[i];
+        if (line.length === 0) continue;
+        if (line.charAt(line.length - 1) === '\r') line = line.substring(0, line.length - 1);
+
+        var i1 = line.indexOf(',');
+        if (i1 === -1) continue;
+        var i2 = line.indexOf(',', i1 + 1);
+        if (i2 === -1) continue;
+
+        var langId = line.substring(i1 + 1, i2);
+        if (langId !== KOREAN_LANGUAGE_ID) continue;
+
+        var i3 = line.indexOf(',', i2 + 1);
+        var name = (i3 === -1) ? line.substring(i2 + 1) : line.substring(i2 + 1, i3);
+
+        if (name === koreanName) {
+            return line.substring(0, i1);
+        }
+    }
+    return null;
+}
+
+// pokemon_species.csv 형식: id,identifier,generation_id, ...
+// species_id에 해당하는 영어 슬러그(identifier, 예: "charmander")를 찾음
+function findEnglishSlugBySpeciesId(speciesId, csvText) {
+    var lines = csvText.split("\n");
+    var needle = speciesId + ",";
+    for (var i = 1; i < lines.length; i++) {
+        var line = lines[i];
+        if (line.length === 0) continue;
+        if (line.charAt(line.length - 1) === '\r') line = line.substring(0, line.length - 1);
+
+        if (line.indexOf(needle) === 0) {
+            var i1 = line.indexOf(',');
+            var i2 = line.indexOf(',', i1 + 1);
+            return (i2 === -1) ? line.substring(i1 + 1) : line.substring(i1 + 1, i2);
+        }
+    }
+    return null;
+}
+
+function findEnglishName(koreanName) {
+    var namesCsv = fetchRawText(SPECIES_NAMES_CSV_URL);
+    var speciesId = findSpeciesIdByKoreanName(koreanName, namesCsv);
+    if (!speciesId) return null;
+
+    var speciesCsv = fetchRawText(SPECIES_CSV_URL);
+    return findEnglishSlugBySpeciesId(speciesId, speciesCsv); // 예: "charmander"
+}
+
+// 진단용
+function debugFindEnglishName(koreanName) {
+    var msg = "";
+    var namesCsv;
+    try {
+        namesCsv = fetchRawText(SPECIES_NAMES_CSV_URL);
+        msg += "이름 CSV 길이: " + namesCsv.length + "\n";
+    } catch (e) {
+        return msg + "이름 CSV 요청 실패: " + e;
+    }
+
+    var speciesId = findSpeciesIdByKoreanName(koreanName, namesCsv);
+    msg += "매칭된 species_id: " + speciesId + "\n";
+    if (!speciesId) {
+        return msg + "'" + koreanName + "' 을(를) 이름 CSV에서 찾지 못했습니다.";
+    }
+
+    var speciesCsv;
+    try {
+        speciesCsv = fetchRawText(SPECIES_CSV_URL);
+        msg += "species CSV 길이: " + speciesCsv.length + "\n";
+    } catch (e) {
+        return msg + "species CSV 요청 실패: " + e;
+    }
+
+    var slug = findEnglishSlugBySpeciesId(speciesId, speciesCsv);
+    msg += "영어 슬러그: " + slug + "\n";
+    if (!slug) return msg;
+
+    var gmRaw;
+    try {
+        gmRaw = fetchGamemasterRaw();
+        msg += "gamemaster 길이: " + gmRaw.length + "\n";
+    } catch (e) {
+        return msg + "gamemaster 요청 실패: " + e;
+    }
+
+    var keyIdx = gmRaw.indexOf('"speciesId"');
+    msg += "\"speciesId\" 첫 등장 위치: " + keyIdx + "\n";
+    var entries = extractPokemonArrayEntries(gmRaw);
+    msg += "추출된 엔트리 개수: " + entries.length + "\n";
+    if (entries.length === 0 && keyIdx !== -1) {
+        var s = Math.max(0, keyIdx - 100);
+        var e = Math.min(gmRaw.length, keyIdx + 200);
+        msg += "\"speciesId\" 주변 원본:\n" + gmRaw.substring(s, e) + "\n";
+    }
+
+    var target = findSpeciesEntry(entries, toSpeciesId(slug));
+    if (target) {
+        msg += "species 엔트리 찾음. atk=" + target.baseStats.atk +
+            " def=" + target.baseStats.def + " hp=" + target.baseStats.hp +
+            " family=" + (target.family ? target.family.id : "(없음)");
+    } else {
+        msg += "gamemaster에서 speciesId=\"" + toSpeciesId(slug) + "\" 를 찾지 못함.";
+        if (entries.length > 0) {
+            msg += "\n첫 엔트리 앞부분: " + entries[0].substring(0, 200);
+        }
+    }
+    return msg;
+}
+
+// ---------------------------------------------
+// 영어 이름 -> 종족값 + 진화계열 (PvPoke gamemaster.json)
+// ---------------------------------------------
+
+function toSpeciesId(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+}
+
+function fetchGamemasterRaw() {
+    var res = Jsoup.connect(GAMEMASTER_URL)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .ignoreContentType(true)
+        .timeout(30000)
+        .maxBodySize(0) // 기본 1MB 제한 해제 (파일이 수 MB 이상임)
+        .execute();
+    return String(res.body());
+}
+
+// "pokemon":[ {..},{..}, ... ] 부분에서 각 { } 객체를 문자열 단위로 잘라냄
+// (중괄호 깊이를 직접 세어가며 자름 - 문자열 안의 따옴표/이스케이프 처리 포함)
+function splitTopLevelObjects(s, startIdx) {
+    var entries = [];
+    var i = startIdx;
+    var len = s.length;
+    while (i < len) {
+        while (i < len) {
+            var ch = s.charAt(i);
+            if (ch === ',' || ch === ' ' || ch === '\n' || ch === '\r' || ch === '\t') { i++; }
+            else { break; }
+        }
+        if (i >= len || s.charAt(i) === ']') break;
+        if (s.charAt(i) !== '{') break;
+
+        var start = i;
+        var depth = 0;
+        var inStr = false;
+        var escape = false;
+        for (; i < len; i++) {
+            var c = s.charAt(i);
+            if (inStr) {
+                if (escape) { escape = false; }
+                else if (c === '\\') { escape = true; }
+                else if (c === '"') { inStr = false; }
+            } else {
+                if (c === '"') { inStr = true; }
+                else if (c === '{') { depth++; }
+                else if (c === '}') {
+                    depth--;
+                    if (depth === 0) { i++; break; }
+                }
+            }
+        }
+        entries.push(s.substring(start, i));
+    }
+    return entries;
+}
+
+function extractPokemonArrayEntries(raw) {
+    var anchorKey = '"speciesId"';
+    var anchorIdx = raw.indexOf(anchorKey);
+    if (anchorIdx === -1) return [];
+    var objStart = raw.lastIndexOf('{', anchorIdx);
+    if (objStart === -1) return [];
+    return splitTopLevelObjects(raw, objStart);
+}
+
+function findSpeciesEntry(entries, speciesId) {
+    var re = new RegExp('"speciesId"\\s*:\\s*"' + speciesId + '"');
+    for (var i = 0; i < entries.length; i++) {
+        if (re.test(entries[i])) {
+            try {
+                var obj = JSON.parse(entries[i]);
+                if (obj.speciesId === speciesId) return obj;
+            } catch (e) {}
+        }
+    }
+    return null;
+}
+
+function findFamilyMembers(entries, familyId) {
+    var re = new RegExp('"id"\\s*:\\s*"' + familyId + '"');
+    var result = [];
+    for (var i = 0; i < entries.length; i++) {
+        if (re.test(entries[i])) {
+            try {
+                var obj = JSON.parse(entries[i]);
+                if (obj.family && obj.family.id === familyId && obj.speciesId.indexOf('_shadow') === -1) {
+                    result.push(obj);
+                }
+            } catch (e) {}
+        }
+    }
+    return result;
+}
+
+function getFamilyStats(englishName) {
+    var speciesId = toSpeciesId(englishName);
+    var raw = fetchGamemasterRaw();
+    var entries = extractPokemonArrayEntries(raw);
+    var target = findSpeciesEntry(entries, speciesId);
+    if (!target) return null;
+    var family = (!target.family || !target.family.id) ? [target] : findFamilyMembers(entries, target.family.id);
+    return { target: target, family: family };
+}
+
+// ---------------------------------------------
+// 표시용 이름 변환: "Charizard (Mega X)" -> "Mega Charizard X"
+// ---------------------------------------------
+
+function formatDisplayName(name) {
+    var m = name.match(/^(.+) \(Mega( X| Y)?\)$/);
+    if (m) {
+        return "Mega " + m[1] + (m[2] ? m[2] : "");
+    }
+    return name;
+}
+
+// 카카오톡 답장은 일반 텍스트라 색상/굵기를 줄 수 없어서, 250위 이내는 🔴로 강조
+// 단, (X)로 참전 불가능한 경우는 어차피 못 쓰는 값이라 강조하지 않음
+function fmtRankPart(label, r, dim) {
+    var mark = (r.rank <= 250 && !dim) ? "🔴" : "";
+    return mark + label + r.rank + (dim ? "(X)" : "");
+}
+
+
+// ---------------------------------------------
+// 명령어 처리
+// ---------------------------------------------
+
+function response(room, msg, sender, isGroupChat, replier, imageDB, packageName) {
+
+    if (msg.indexOf("?포켓몬디버그") === 0) {
+        var name = msg.substring("?포켓몬디버그".length).replace(/^\s+|\s+$/g, "");
+        if (name.length === 0) {
+            replier.reply("사용법: ?포켓몬디버그 <한국어이름>");
+            return;
+        }
+        try {
+            replier.reply(debugFindEnglishName(name));
+        } catch (e) {
+            replier.reply("디버그 중 오류: " + e);
+        }
+        return;
+    }
+
+    if (msg.indexOf("?포켓몬") === 0) {
+        var rest = msg.substring("?포켓몬".length).replace(/^\s+/, "");
+        var parts = rest.split(/\s+/).filter(function (x) { return x.length > 0; });
+
+        if (parts.length < 5) {
+            replier.reply("사용법: ?포켓몬 <한국어이름> <IV공격> <IV체력> <IV방어> <CP>\n예: ?포켓몬 파이리 0 14 15 395");
+            return;
+        }
+
+        var koreanName = parts[0];
+        var ivAtk = parseInt(parts[1], 10);
+        var ivSta = parseInt(parts[2], 10);
+        var ivDef = parseInt(parts[3], 10);
+        var cp = parseInt(parts[4], 10);
+
+        if (isNaN(ivAtk) || isNaN(ivSta) || isNaN(ivDef) ||
+            ivAtk < 0 || ivAtk > 15 || ivSta < 0 || ivSta > 15 || ivDef < 0 || ivDef > 15) {
+            replier.reply("IV 값은 0~15 사이 숫자여야 합니다.\n순서: <IV공격> <IV체력> <IV방어>");
+            return;
+        }
+        if (isNaN(cp) || cp <= 0) {
+            replier.reply("CP 값이 올바르지 않습니다.");
+            return;
+        }
+
+        try {
+            var englishName = findEnglishName(koreanName);
+            if (!englishName) {
+                replier.reply("'" + koreanName + "'에 해당하는 영어 이름을 찾지 못했습니다. (?포켓몬디버그 " + koreanName + " 으로 확인해보세요)");
+                return;
+            }
+
+            var info = getFamilyStats(englishName);
+            if (!info || !info.family || info.family.length === 0) {
+                replier.reply(englishName + "(" + koreanName + ") 의 종족값 정보를 찾지 못했습니다.");
+                return;
+            }
+
+            // 처음 입력한 CP로부터, 실제 조회한 종(입력한 그 폼)의 "현재 레벨"을 구함
+            // -> 파워업으로 레벨을 낮출 수 없으므로, 이보다 낮은 최적레벨이 필요한 리그는 참전 불가
+            var tp = info.target.baseStats;
+            var currentLevelIdx = findLevelForCP(tp.atk, tp.def, tp.hp, ivAtk, ivDef, ivSta, cp);
+
+            var lines = [];
+            for (var i = 0; i < info.family.length; i++) {
+                var p = info.family[i];
+                var atk = p.baseStats.atk, def = p.baseStats.def, hp = p.baseStats.hp;
+
+                var s = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 1500);
+                var h = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 2500);
+                var m = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, null);
+
+                // 그 리그의 최적레벨이 "현재 레벨"보다 낮으면 -> 이미 지나쳐서 참전 불가 -> (X)
+                var sDim = (s.levelIdx < currentLevelIdx);
+                var hDim = (h.levelIdx < currentLevelIdx);
+                var mDim = (m.levelIdx < currentLevelIdx);
+
+                var displayName = formatDisplayName(p.speciesName);
+                lines.push(
+                    displayName +
+                    " / " + fmtRankPart("S", s, sDim) + "[lvl" + s.level + " cp" + s.cp + "]" +
+                    " / " + fmtRankPart("H", h, hDim) + "[lvl" + h.level + " cp" + h.cp + "]" +
+                    " / " + fmtRankPart("M", m, mDim) + "[lvl" + m.level + " cp" + m.cp + "]"
+                );
+            }
+
+            replier.reply(lines.join("\n"));
+        } catch (e) {
+            replier.reply("오류가 발생했습니다: " + e);
+        }
+        return;
+    }
+}
