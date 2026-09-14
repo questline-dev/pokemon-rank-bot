@@ -585,16 +585,40 @@ async function findDefaultDexEntry(entries, dex) {
 function findFamilyMembers(entries, familyId) {
     var re = new RegExp('"id"\\s*:\\s*"' + familyId + '"');
     var result = [];
+    var seen = {};
     for (var i = 0; i < entries.length; i++) {
         if (re.test(entries[i])) {
             try {
                 var obj = JSON.parse(entries[i]);
                 if (obj.family && obj.family.id === familyId && obj.speciesId.indexOf('_shadow') === -1 && !hasDuplicateTag(obj)) {
                     result.push(obj);
+                    seen[obj.speciesId] = true;
                 }
             } catch (e) {}
         }
     }
+
+    // 트리토돈(gastrodon)처럼 진화 대상인데 정작 자기 자신은 family 정보가 아예 없어서
+    // (family.id로 찾는) 위 스캔에 안 걸리는 경우를 보정: 이미 모은 멤버들의
+    // evolutions가 가리키는 대상을 이름으로 직접 찾아서 추가한다(고정점 반복 - 그렇게
+    // 추가된 항목이 또 다른 family-less 진화대상을 가리킬 수도 있으므로).
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (var j = 0; j < result.length; j++) {
+            var evos = (result[j].family && result[j].family.evolutions) ? result[j].family.evolutions : [];
+            for (var k = 0; k < evos.length; k++) {
+                if (seen[evos[k]]) continue;
+                seen[evos[k]] = true; // 못 찾아도 다시 시도하지 않도록 먼저 표시
+                var found = findSpeciesEntry(entries, evos[k]);
+                if (found && found.speciesId.indexOf('_shadow') === -1 && !hasDuplicateTag(found)) {
+                    result.push(found);
+                    changed = true;
+                }
+            }
+        }
+    }
+
     return result;
 }
 
