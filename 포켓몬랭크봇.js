@@ -455,6 +455,29 @@ function findTransientFormsForDexes(entries, dexList) {
     return result;
 }
 
+// 산호르곤(cursola)처럼, 자기 자신은 family.id/evolutions를 정상적으로 갖고 있지만
+// "부모"(코산호 - dex 222, family 필드 자체가 아예 없음)쪽에서는 진화 정보를 전혀 들고
+// 있지 않아서 어느 쪽에서도 못 찾아지는 경우를 위한 것. family.parent가 주어진 종
+// 목록(들) 중 하나를 가리키는 항목을 역방향으로 찾아준다.
+function findChildrenByParent(entries, parentSpeciesIds) {
+    var parentSet = {};
+    for (var i = 0; i < parentSpeciesIds.length; i++) parentSet[parentSpeciesIds[i]] = true;
+    var result = [];
+    for (i = 0; i < entries.length; i++) {
+        if (entries[i].indexOf('"parent"') === -1) continue; // 빠른 사전필터
+        try {
+            var obj = JSON.parse(entries[i]);
+            var parent = (obj.family && obj.family.parent) ? obj.family.parent : null;
+            if (parent && parentSet[parent] &&
+                obj.speciesId.indexOf('_shadow') === -1 &&
+                !hasDuplicateTag(obj)) {
+                result.push(obj);
+            }
+        } catch (e) {}
+    }
+    return result;
+}
+
 function collectDexCandidates(entries, dex) {
     var re = new RegExp('"dex"\\s*:\\s*' + dex + '\\D');
     var result = [];
@@ -642,6 +665,35 @@ function getFamilyStats(englishName, dex, ivAtk, ivDef, ivSta, cp) {
         ? collectDexCandidates(entries, target.dex)
         : findFamilyMembers(entries, target.family.id);
     if (family.length === 0) family = [target];
+
+    // 산호르곤(cursola)처럼, 조회한 종 자체(코산호 등)가 family 정보를 아예 안 갖고 있어서
+    // (위에서 collectDexCandidates 경로를 탔을 때) 진화형을 정방향으로 찾을 방법이 없는
+    // 경우를 보정한다. family.parent가 지금까지 모은 후보들 중 하나를 가리키는 항목을
+    // 역방향으로 찾아서 합친다. 그 항목이 자기 family.id를 갖고 있으면(대개 그럼) 그
+    // family.id로 findFamilyMembers를 한 번 더 돌려서 그쪽의 형제/진화형까지 같이 챙긴다.
+    if (!target.family || !target.family.id) {
+        var baseSpeciesIds = [];
+        for (var bi = 0; bi < family.length; bi++) baseSpeciesIds.push(family[bi].speciesId);
+        var knownIdsForChildren = {};
+        for (bi = 0; bi < family.length; bi++) knownIdsForChildren[family[bi].speciesId] = true;
+        var children = findChildrenByParent(entries, baseSpeciesIds);
+        for (var ci = 0; ci < children.length; ci++) {
+            var child = children[ci];
+            if (knownIdsForChildren[child.speciesId]) continue;
+            if (child.family && child.family.id) {
+                var childFamily = findFamilyMembers(entries, child.family.id);
+                for (var cfi = 0; cfi < childFamily.length; cfi++) {
+                    if (!knownIdsForChildren[childFamily[cfi].speciesId]) {
+                        family.push(childFamily[cfi]);
+                        knownIdsForChildren[childFamily[cfi].speciesId] = true;
+                    }
+                }
+            } else {
+                family.push(child);
+                knownIdsForChildren[child.speciesId] = true;
+            }
+        }
+    }
 
     // 대짱이(swampert_mega)처럼 메가폼의 family 필드가 아예 없어서(리자몽 메가처럼
     // family.id는 있고 parent만 최종진화체를 건너뛰는 것과는 다른 패턴) 위의
