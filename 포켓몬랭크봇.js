@@ -666,6 +666,40 @@ function getFamilyStats(englishName, dex, ivAtk, ivDef, ivSta, cp) {
         : findFamilyMembers(entries, target.family.id);
     if (family.length === 0) family = [target];
 
+    // 우파(Wooper)/팔데아 우파처럼, 한글이름 하나가 서로 다른 진화계열(다른 family.id)을
+    // 쓰는 지역폼 두 개를 가리킬 수 있다 - PokeAPI 한글이름은 지역폼을 구분 안 해서
+    // 둘 다 "우파"로 매칭되는데, 우리는 그중 정확히 slug가 일치한 하나(예: 일반 우파 ->
+    // 니드퀸이 아니라 두꺼비집 계열)의 family.id만 펼쳐서 나머지 계열(팔데아 우파 ->
+    // 베라모스)이 통째로 빠지고 있었다(2026-09-14, 사용자가 팔데아 우파가 안 나온다고
+    // 신고해서 발견). 같은 dex를 쓰는 다른 후보 중 "이미 모은 것과 다른 family.id"를
+    // 쓰는 형제가 있으면 그 계열 전체를 findFamilyMembers로 마저 펼쳐서 합친다.
+    var dexSiblings = collectDexCandidates(entries, target.dex);
+    var knownFamilyIds = {};
+    var knownSpeciesIdsSoFar = {};
+    var dsi;
+    for (dsi = 0; dsi < family.length; dsi++) {
+        knownSpeciesIdsSoFar[family[dsi].speciesId] = true;
+        if (family[dsi].family && family[dsi].family.id) knownFamilyIds[family[dsi].family.id] = true;
+    }
+    for (dsi = 0; dsi < dexSiblings.length; dsi++) {
+        var sib = dexSiblings[dsi];
+        if (knownSpeciesIdsSoFar[sib.speciesId]) continue;
+        if (sib.family && sib.family.id) {
+            if (knownFamilyIds[sib.family.id]) continue;
+            var sibFamily = findFamilyMembers(entries, sib.family.id);
+            for (var sfi = 0; sfi < sibFamily.length; sfi++) {
+                if (!knownSpeciesIdsSoFar[sibFamily[sfi].speciesId]) {
+                    family.push(sibFamily[sfi]);
+                    knownSpeciesIdsSoFar[sibFamily[sfi].speciesId] = true;
+                }
+            }
+            knownFamilyIds[sib.family.id] = true;
+        } else {
+            family.push(sib);
+            knownSpeciesIdsSoFar[sib.speciesId] = true;
+        }
+    }
+
     // 산호르곤(cursola)처럼, 조회한 종 자체(코산호 등)가 family 정보를 아예 안 갖고 있어서
     // (위에서 collectDexCandidates 경로를 탔을 때) 진화형을 정방향으로 찾을 방법이 없는
     // 경우를 보정한다. family.parent가 지금까지 모은 후보들 중 하나를 가리키는 항목을
