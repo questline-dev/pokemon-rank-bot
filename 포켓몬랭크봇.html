@@ -1065,6 +1065,7 @@ async function runCalc() {
             var s = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 1500, displayMaxLevelIdx);
             var h = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 2500, displayMaxLevelIdx);
             var m = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, null, displayMaxLevelIdx);
+            var l = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 500, displayMaxLevelIdx);
 
             // "실제 레벨"은 사이즈(호바귀/펌킨인 등)별로 다르므로 p._currentLevelIdx
             // (collectReachableFromTarget에서 사이즈별로 따로 구해 붙여준 값)를 쓴다.
@@ -1072,6 +1073,7 @@ async function runCalc() {
             var sDim = cpAtCurrentLevel > 1500;
             var hDim = cpAtCurrentLevel > 2500;
             var mDim = false;
+            var lDim = cpAtCurrentLevel > 500;
 
             var displayName = formatDisplayName(p.speciesName);
             var koreanFormName = koreanNameMap[String(p.dex)];
@@ -1079,12 +1081,14 @@ async function runCalc() {
             var sPart = partToHtml(fmtRankPart("S", s, sDim));
             var hPart = partToHtml(fmtRankPart("H", h, hDim));
             var mPart = partToHtml(fmtRankPart("M", m, mDim));
+            var lPart = partToHtml(fmtRankPart("L", l, lDim));
 
             htmlLines.push(
                 "- " + escapeHtml(displayName) +
                 " / " + sPart +
                 " / " + hPart +
-                " / " + mPart
+                " / " + mPart +
+                " / " + lPart
             );
         }
 

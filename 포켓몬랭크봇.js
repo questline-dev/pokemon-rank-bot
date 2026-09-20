@@ -998,6 +998,7 @@ function response(room, msg, sender, isGroupChat, replier, imageDB, packageName)
                 var s = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 1500, displayMaxLevelIdx);
                 var h = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 2500, displayMaxLevelIdx);
                 var m = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, null, displayMaxLevelIdx);
+                var l = calcRank(atk, def, hp, ivAtk, ivDef, ivSta, 500, displayMaxLevelIdx);
 
                 // (X) 판정: "지금 실제 레벨"로 이 진화단계까지 갔을 때 나오는 CP가
                 // 그 리그의 CP상한을 넘는지로 직접 판정한다.
@@ -1009,6 +1010,7 @@ function response(room, msg, sender, isGroupChat, replier, imageDB, packageName)
                 var sDim = cpAtCurrentLevel > 1500;
                 var hDim = cpAtCurrentLevel > 2500;
                 var mDim = false; // 마스터리그는 CP 상한이 없음
+                var lDim = cpAtCurrentLevel > 500;
 
                 var displayName = formatDisplayName(p.speciesName);
                 var koreanFormName = koreanNameMap[String(p.dex)];
@@ -1017,7 +1019,8 @@ function response(room, msg, sender, isGroupChat, replier, imageDB, packageName)
                     "- " + displayName +
                     " / " + fmtRankPart("S", s, sDim) +
                     " / " + fmtRankPart("H", h, hDim) +
-                    " / " + fmtRankPart("M", m, mDim)
+                    " / " + fmtRankPart("M", m, mDim) +
+                    " / " + fmtRankPart("L", l, lDim)
                 );
             }
 
