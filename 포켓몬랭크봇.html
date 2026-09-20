@@ -94,6 +94,7 @@
     min-height: 20px;
   }
   .hot { color: var(--hot); font-weight: 700; }
+  .lvl-num { color: var(--accent); }
   .toolbar { display: flex; justify-content: flex-end; margin-top: 4px; }
   #debugBox {
     display: none;
@@ -879,16 +880,17 @@ function formatDisplayName(name) {
 }
 
 // 카카오톡 버전은 텍스트만 되니 🔴 이모지로 강조했지만, 여기는 HTML이라 빨간 굵은 글씨로 표시.
+// 빨간 강조 안에서 "lvl"과 레벨 숫자가 잘 구분되도록 레벨 숫자만 파란색(.lvl-num)으로 감싼다.
 function fmtRankPart(label, r, dim) {
-    var text = label + r.rank;
+    var html = escapeHtml(label + r.rank);
     if (r.rank <= 1500 && !dim) {
-        text += "[lvl" + r.level + " cp" + r.cp + "]";
+        html += escapeHtml("[lvl") + '<span class="lvl-num">' + escapeHtml(String(r.level)) + '</span>' + escapeHtml(" cp" + r.cp + "]");
     }
     if (dim) {
-        text += "(X)";
+        html += escapeHtml("(X)");
     }
     var hot = (r.rank <= 250 && !dim);
-    return { text: text, hot: hot };
+    return { html: html, hot: hot };
 }
 
 function escapeHtml(s) {
@@ -896,8 +898,7 @@ function escapeHtml(s) {
 }
 
 function partToHtml(part) {
-    var t = escapeHtml(part.text);
-    return part.hot ? '<span class="hot">' + t + '</span>' : t;
+    return part.hot ? '<span class="hot">' + part.html + '</span>' : part.html;
 }
 
 // ---------------------------------------------
