@@ -38,6 +38,12 @@
  * 명령어 순서를 <IV공격> <IV방어> <IV체력>으로 바로잡음. (실제 사이트와 여러
  * 포켓몬으로 대조해서 CP·등수·레벨이 전부 정확히 일치하는 것을 확인했음)
  *
+ * [2026-09 개선: 이름 입력 보정]
+ * 이름은 콜론(:)/공백/영문 대소문자 차이를 무시하고 비교함 ("타입널", "폴리곤z"도 조회됨).
+ * 니드런처럼 한국어 이름이 암수로 나뉜 경우("니드런♀"/"니드런♂")는 "니드런암"/"니드런수"
+ * (암컷/수컷, ♀/♂도 가능)로 입력할 수 있고, "니드런"만 치면 입력한 IV로 그 CP가 정확히
+ * 나오는 쪽을 골라 계산함. 둘 다 맞거나 둘 다 안 맞으면 암수를 붙여 다시 입력하라고 안내함.
+ *
  * [CP 입력값에 대해]
  * 입력한 CP로 "지금 조회한 폼(진화단계)"의 실제 현재 레벨을 역산합니다
  * (이 레벨 역산에는 상한을 두지 않음 - XL 사탕으로 40레벨을 넘겼을 수도
@@ -131,6 +137,15 @@ function findLevelForCP(atk, def, hp, ivA, ivD, ivS, targetCP) {
     return ABSOLUTE_MAX_LEVEL_INDEX;
 }
 
+// 이 종족값 + IV로 입력한 CP가 "정확히" 나오는 레벨(1~50)이 하나라도 있는지.
+// (니드런♀/♂처럼 종족값이 다른 암수 후보 중 실제 개체가 어느 쪽인지 가려낼 때 사용)
+function canReachExactCP(stats, ivA, ivD, ivS, targetCP) {
+    for (var idx = 0; idx <= ABSOLUTE_MAX_LEVEL_INDEX; idx++) {
+        if (calcCP(stats.atk, stats.def, stats.hp, ivA, ivD, ivS, idx) === targetCP) return true;
+    }
+    return false;
+}
+
 // 주어진 종족값(atk,def,hp) + 리그 cap에서, 입력한 IV조합이 4096가지 중 몇 등인지 계산.
 // maxLevelIdx: 등수/CP 표시에 사용할 "최대 레벨" 상한 (기본 40레벨, XL 사탕 있으면 50레벨)
 // 반환: { rank, overCap, level(레벨 숫자), cp }
@@ -184,9 +199,18 @@ function fetchRawText(url) {
     return String(res.body());
 }
 
+// 이름 비교용 정규화: 콜론(:)과 공백을 빼고 영문은 대문자로 맞춘다.
+// "타입널" = "타입:널", "폴리곤z" = "폴리곤Z" 처럼 입력해도 찾을 수 있게 하기 위함.
+// (이름 CSV 안에서 정규화 후 서로 겹치는 이름은 없음을 2026-09-24에 확인)
+function normalizeKoreanName(name) {
+    return String(name).replace(/[:：\s]/g, "").toUpperCase();
+}
+
 // pokemon_species_names.csv 형식: pokemon_species_id,local_language_id,name[,genus]
-// 한국어(language_id=3) 행 중 이름이 정확히 일치하는 것을 찾아 species_id 반환
+// 한국어(language_id=3) 행 중 이름이 일치하는 것을 찾아 species_id 반환
+// (normalizeKoreanName 기준으로 비교 - 콜론/공백/영문 대소문자 차이는 무시)
 function findSpeciesIdByKoreanName(koreanName, csvText) {
+    var targetName = normalizeKoreanName(koreanName);
     var lines = csvText.split("\n");
     for (var i = 1; i < lines.length; i++) { // 0번째는 헤더 행
         var line = lines[i];
@@ -204,11 +228,46 @@ function findSpeciesIdByKoreanName(koreanName, csvText) {
         var i3 = line.indexOf(',', i2 + 1);
         var name = (i3 === -1) ? line.substring(i2 + 1) : line.substring(i2 + 1, i3);
 
-        if (name === koreanName) {
+        if (normalizeKoreanName(name) === targetName) {
             return line.substring(0, i1);
         }
     }
     return null;
+}
+
+// ---------------------------------------------
+// 암수로 이름이 나뉜 포켓몬 (니드런♀ / 니드런♂)
+// ---------------------------------------------
+// PokeAPI 한국어 이름에는 니드런만 "니드런♀", "니드런♂"처럼 암수 기호가 붙어 있어서,
+// "니드런"만 치면 정확히 일치하는 이름이 없다. 폰에서 ♀♂를 치기 번거로우므로
+// 이름 끝의 "암/암컷"은 ♀, "수/수컷"은 ♂로 바꿔서 찾는다.
+// (원래 이름으로 못 찾았을 때만 적용 - "루가루암"처럼 원래 "암"으로 끝나는 이름 보호)
+var GENDER_ALIASES = [["암컷", "♀"], ["수컷", "♂"], ["암", "♀"], ["수", "♂"]];
+var GENDER_SYMBOLS = ["♀", "♂"];
+
+// "니드런암" -> "니드런♀" 의 species_id. 해당 없으면 null.
+function findSpeciesIdByGenderAlias(koreanName, namesCsv) {
+    for (var i = 0; i < GENDER_ALIASES.length; i++) {
+        var suffix = GENDER_ALIASES[i][0];
+        if (koreanName.length <= suffix.length) continue;
+        if (koreanName.substring(koreanName.length - suffix.length) !== suffix) continue;
+        var aliased = koreanName.substring(0, koreanName.length - suffix.length) + GENDER_ALIASES[i][1];
+        var speciesId = findSpeciesIdByKoreanName(aliased, namesCsv);
+        if (speciesId) return speciesId;
+    }
+    return null;
+}
+
+// "니드런"처럼 암수 표시 없이 입력했을 때, 이름 CSV에 있는 암수 후보들을 돌려줌.
+// 반환 예: [{ name: "니드런♀", speciesId: "29" }, { name: "니드런♂", speciesId: "32" }] (없으면 빈 배열)
+function findGenderCandidates(koreanName, namesCsv) {
+    var result = [];
+    for (var i = 0; i < GENDER_SYMBOLS.length; i++) {
+        var name = koreanName + GENDER_SYMBOLS[i];
+        var speciesId = findSpeciesIdByKoreanName(name, namesCsv);
+        if (speciesId) result.push({ name: name, speciesId: speciesId });
+    }
+    return result;
 }
 
 // pokemon_species.csv 형식: id,identifier,generation_id, ...
@@ -233,9 +292,13 @@ function findEnglishSlugBySpeciesId(speciesId, csvText) {
 // { dex: "710", englishName: "pumpkaboo" } 형태로 반환 (dex는 getFamilyStats의
 // 폴백 검색에 쓰임 - 호바귀처럼 gamemaster에 "기본형" 단독 항목이 없는 경우 대비)
 function findEnglishName(koreanName, namesCsv) {
-    var speciesId = findSpeciesIdByKoreanName(koreanName, namesCsv);
+    var speciesId = findSpeciesIdByKoreanName(koreanName, namesCsv) ||
+        findSpeciesIdByGenderAlias(koreanName, namesCsv);
     if (!speciesId) return null;
+    return findEnglishNameBySpeciesId(speciesId);
+}
 
+function findEnglishNameBySpeciesId(speciesId) {
     var speciesCsv = fetchRawText(SPECIES_CSV_URL);
     var englishName = findEnglishSlugBySpeciesId(speciesId, speciesCsv); // 예: "charmander"
     if (!englishName) return null;
@@ -972,6 +1035,35 @@ function response(room, msg, sender, isGroupChat, replier, imageDB, packageName)
         try {
             var namesCsv = fetchRawText(SPECIES_NAMES_CSV_URL);
             var found = findEnglishName(koreanName, namesCsv);
+            var info = null;
+            var genderNote = "";
+            if (!found) {
+                // "니드런"처럼 암수 표시 없이 입력한 경우: 암수 후보 중 입력한 IV로 이 CP가
+                // 정확히 나오는 쪽이 하나뿐이면 그쪽으로 계산하고, 가려낼 수 없으면
+                // (둘 다 나오거나 둘 다 안 나오면) 암수를 붙여서 다시 입력하게 한다.
+                var genderCandidates = findGenderCandidates(koreanName, namesCsv);
+                if (genderCandidates.length > 0) {
+                    var matched = [];
+                    for (var gi = 0; gi < genderCandidates.length; gi++) {
+                        var gFound = findEnglishNameBySpeciesId(genderCandidates[gi].speciesId);
+                        if (!gFound) continue;
+                        var gInfo = getFamilyStats(gFound.englishName, gFound.dex, ivAtk, ivDef, ivSta, cp);
+                        if (gInfo && gInfo.target && canReachExactCP(gInfo.target.baseStats, ivAtk, ivDef, ivSta, cp)) {
+                            matched.push({ name: genderCandidates[gi].name, found: gFound, info: gInfo });
+                        }
+                    }
+                    if (matched.length !== 1) {
+                        replier.reply("'" + koreanName + "'은 암수가 따로 있습니다. " +
+                            koreanName + "암 또는 " + koreanName + "수로 입력해주세요. (예: ?포켓몬 " +
+                            koreanName + "암 " + parts.slice(1).join(" ") + ")");
+                        return;
+                    }
+                    found = matched[0].found;
+                    info = matched[0].info;
+                    genderNote = "※ '" + koreanName + "'은 암수가 따로 있어서, CP " + cp + "에 맞는 " +
+                        matched[0].name + "로 계산했습니다.\n\n";
+                }
+            }
             if (!found) {
                 replier.reply("'" + koreanName + "'에 해당하는 영어 이름을 찾지 못했습니다. (?포켓몬디버그 " + koreanName + " 으로 확인해보세요)");
                 return;
@@ -979,7 +1071,7 @@ function response(room, msg, sender, isGroupChat, replier, imageDB, packageName)
             var englishName = found.englishName;
             var koreanNameMap = buildKoreanNameMap(namesCsv);
 
-            var info = getFamilyStats(englishName, found.dex, ivAtk, ivDef, ivSta, cp);
+            if (!info) info = getFamilyStats(englishName, found.dex, ivAtk, ivDef, ivSta, cp);
             if (!info || !info.family || info.family.length === 0) {
                 replier.reply(englishName + "(" + koreanName + ") 의 종족값 정보를 찾지 못했습니다.");
                 return;
@@ -1027,7 +1119,7 @@ function response(room, msg, sender, isGroupChat, replier, imageDB, packageName)
             var header = "● " + koreanName + " " + ivAtk + " " + ivDef + " " + ivSta + " " + cp +
                 " : lvl" + (1 + currentLevelIdx * 0.5);
 
-            replier.reply(header + "\n\n" + lines.join("\n\n"));
+            replier.reply(genderNote + header + "\n\n" + lines.join("\n\n"));
         } catch (e) {
             replier.reply("오류가 발생했습니다: " + e);
         }
