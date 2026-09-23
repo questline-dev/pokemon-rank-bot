@@ -880,16 +880,22 @@ function formatDisplayName(name) {
 }
 
 // 카카오톡 버전은 텍스트만 되니 🔴 이모지로 강조했지만, 여기는 HTML이라 빨간 굵은 글씨로 표시.
-// 빨간 강조 안에서 "lvl"과 레벨 숫자가 잘 구분되도록 레벨 숫자만 파란색(.lvl-num)으로 감싼다.
+// 빨간 강조(hot)일 때만 "lvl"/"cp" 글자와 뒤따르는 숫자가 헷갈리므로, 그 경우에만
+// 숫자를 파란색(.lvl-num)으로 감싼다. 빨간 강조가 아닌 줄은 원래대로 그냥 텍스트.
 function fmtRankPart(label, r, dim) {
+    var hot = (r.rank <= 250 && !dim);
     var html = escapeHtml(label + r.rank);
     if (r.rank <= 1500 && !dim) {
-        html += escapeHtml("[lvl") + '<span class="lvl-num">' + escapeHtml(String(r.level)) + '</span>' + escapeHtml(" cp" + r.cp + "]");
+        if (hot) {
+            html += escapeHtml("[lvl") + '<span class="lvl-num">' + escapeHtml(String(r.level)) + '</span>' +
+                escapeHtml(" cp") + '<span class="lvl-num">' + escapeHtml(String(r.cp)) + '</span>' + escapeHtml("]");
+        } else {
+            html += escapeHtml("[lvl" + r.level + " cp" + r.cp + "]");
+        }
     }
     if (dim) {
         html += escapeHtml("(X)");
     }
-    var hot = (r.rank <= 250 && !dim);
     return { html: html, hot: hot };
 }
 
